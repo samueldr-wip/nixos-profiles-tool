@@ -196,6 +196,21 @@ COMMANDS = {
       end
     },
   },
+  "dump-grouped-boot-files" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = "Dump system profile generations grouped using the same boot files"
+    end,
+    handler: ->(_) {
+      system_profile = Profile.from_name("system")
+      grouped = system_profile.generations.values.group_by do |generation|
+        generation.boot_files
+      end
+      data = grouped.map do |key, generations|
+        [key.join(";"), generations.map(&:id)]
+      end.to_h
+      puts JSON.pretty_generate(data)
+    }
+  },
   "dump-generations" => {
     parser: OptionParser.new do |opts|
       opts.banner = "Dump system profile generations information to JSON"
