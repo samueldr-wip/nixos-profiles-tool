@@ -211,7 +211,7 @@ COMMANDS = {
       end
     },
   },
-  "dump-grouped-boot-files" => {
+  "dump-generations-sharing-files" => {
     parser: OptionParser.new do |opts|
       opts.banner = "Dump system profile generations grouped using the same boot files"
     end,
