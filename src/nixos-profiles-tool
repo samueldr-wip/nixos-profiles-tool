@@ -26,7 +26,7 @@ COMMANDS = {
       opts.banner = "Checks files status under the `/boot` partition"
     end,
     handler: ->(_) {
-      pseudostore = File.join($boot_partition, "kernels")
+      pseudostore = File.join($root, $boot_partition, "kernels")
       system_profile = Profile.from_name("system")
       current_files = Dir.chdir(pseudostore) do
         Dir.glob("*")
@@ -69,7 +69,7 @@ COMMANDS = {
     end,
     handler: ->(_) {
       system_profile = Profile.from_name("system")
-      Dir.chdir(File.join($boot_partition, "kernels")) do
+      Dir.chdir(File.join($root, $boot_partition, "kernels")) do
         current_files = Dir.glob("*")
         known_boot_files = system_profile.boot_files
         leftover = current_files - known_boot_files
@@ -221,7 +221,7 @@ def parse_cli(argv)
       "",
       "Global options:",
     ].join("\n")
-    opts.on("--boot-partition=PART", "Boot directory or partition (defaults to /boot)") do |root|
+    opts.on("--boot-partition=PART", "Boot directory or partition (defaults to /boot)") do |boot_partition|
       $boot_partition = boot_partition
     end
     opts.on("--root=ROOT", "Filesystem root (e.g. /mnt)") do |root|

@@ -82,11 +82,11 @@ class Generation
   def formatted_size_usage()
     files = boot_files_usage
     unique_usage = files[:unique].map do |path|
-      File.size?(File.join($boot_partition, "kernels", path)) || 0
+      File.size?(File.join($root, $boot_partition, "kernels", path)) || 0
     end
       .reduce(0, &:+)
     shared_usage = files[:shared].keys.map do |path|
-      File.size?(File.join($boot_partition, "kernels", path)) || 0
+      File.size?(File.join($root, $boot_partition, "kernels", path)) || 0
     end
       .reduce(0, &:+)
 
