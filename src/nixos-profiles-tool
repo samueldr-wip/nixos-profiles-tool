@@ -1,0 +1,259 @@
+#!/usr/bin/env ruby
+
+require "fileutils"
+require "json"
+require "optparse"
+require "shellwords"
+
+require_relative "lib"
+
+VERSION = "0.0.1"
+
+# This should be right for NixOS.
+NIX_DIR = "/nix"
+NIX_STORE_DIR = File.join(NIX_DIR, "store")
+NIX_STATE_DIR = File.join(NIX_DIR, "var/nix")
+
+$root = "/"
+$boot_partition = "/boot"
+
+$global_options = {}
+$command_options = {}
+
+COMMANDS = {
+  "check-boot-files" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = "Checks files status under the `/boot` partition"
+    end,
+    handler: ->(_) {
+      pseudostore = File.join($boot_partition, "kernels")
+      system_profile = Profile.from_name("system")
+      current_files = Dir.chdir(pseudostore) do
+        Dir.glob("*")
+      end
+      known_boot_files = system_profile.boot_files
+
+      missing_files = known_boot_files - current_files
+      if missing_files != []
+        puts "Warning: these files from live generations are missing from boot files"
+        missing_files.each do |file|
+          puts "  - #{file}"
+        end
+        puts ""
+      end
+
+      leftover = current_files - known_boot_files
+      if leftover != []
+        puts "Extra files in /boot partitions not part of live generations:"
+        leftover.each do |file|
+          puts "  - #{file}\t(#{File.size(File.join(pseudostore, file)).format_size()})"
+        end
+        puts ""
+      end
+
+      puts "These live generation files are found under #{pseudostore}:"
+      (current_files - leftover)
+        .sort { |a, b| a.split("-", 2).last <=> b.split("-", 2).last }
+        .each do |file|
+          puts "  - #{file}\t(#{File.size(File.join(pseudostore, file)).format_size()})"
+        end
+    },
+  },
+  "prune-boot-files" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = [
+        "Prune files outside of existing generations from the `/boot` partition",
+        "",
+        "Running this command should only be needed to unbreak a stuck `nixos-rebuild` that can't complete due to the `/boot` partition being too full. In all other cases, `nixos-rebuild` will properly prune the boot partition.",
+      ].join("\n")
+    end,
+    handler: ->(_) {
+      system_profile = Profile.from_name("system")
+      Dir.chdir(File.join($boot_partition, "kernels")) do
+        current_files = Dir.glob("*")
+        known_boot_files = system_profile.boot_files
+        leftover = current_files - known_boot_files
+        if leftover == []
+          puts "Nothing needs to be done. (Did you want to remove a generation first?)"
+          exit(0)
+        end
+        puts "Removing files:"
+        leftover.each do |file|
+          puts "  - #{file}"
+        end
+        puts ""
+
+        begin
+          FileUtils.rm(leftover)
+        rescue => e
+          message = e.message.sub(/ @ apply2files.*/, "")
+          $stderr.puts("Error while removing files: #{message}")
+          exit 1
+        end
+
+        puts "Done..."
+      end
+    },
+  },
+  "list-generations" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = "List generation in a user-friendly manner"
+    end,
+    handler: ->(_) {
+      system_profile = Profile.from_name("system")
+      system_profile.generations.each do |_, generation|
+        # TODO: align table correctly
+        puts [
+          generation.id,
+          generation.date,
+          generation.formatted_size_usage,
+          generation.label,
+        ].join("\t")
+      end
+    },
+  },
+  "remove-generation" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = "Remove a given generation"
+    end,
+    handler: ->(args) {
+      if args.length != 1
+        $stderr.puts "Usage: remove-generation <id>"
+        exit 1
+      end
+      id = args.shift
+
+      system_profile = Profile.from_name("system")
+      generation = system_profile.generations[id]
+      unless generation
+        $stderr.puts("Generation #{id} does not exist.")
+        exit 1
+      end
+      path = generation.path
+      puts "Removing profile '#{path}'"
+      begin
+        FileUtils.rm(path)
+      rescue => e
+        message = e.message.sub(/ @ apply2files.*/, "")
+        $stderr.puts("Error while removing generation: #{message}")
+        exit 1
+      end
+    },
+  },
+  "remove-generations" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = [
+        "Remove generations given parameters",
+        #"",
+        #"Specifying multiple options act like AND.",
+      ].join("\n")
+      #opts.on("--before-date=DATE", "Removes generations before the given DATE")
+      #opts.on("--after-date=DATE", "Removes generations after the given DATE")
+      opts.on("--before-id=ID", "Removes generations before the given ID")
+      #opts.on("--after-id=ID", "Removes generations after the given ID")
+      opts.on("--max=COUNT", "Keeps at most COUNT generations")
+    end,
+    handler: ->(args) {
+      if $command_options.keys.length == 0
+        $stderr.puts "Error: At least one option is needed."
+        $stderr.puts ""
+        $stderr.puts "Usage: remove-generations [options]"
+        # TODO: usage from parse...
+        exit 1
+      end
+      system_profile = Profile.from_name("system")
+      kept = system_profile.generations.keys
+
+      if $command_options[:"before-id"]
+        target = $command_options[:"before-id"].to_i
+        kept = kept.select do |id|
+          id.to_i >= target
+        end
+      end
+      
+
+      if $command_options[:max]
+        max = $command_options[:max].to_i
+        # Do not error on too big of a length
+        if max < kept.length
+          kept = kept.slice(-1*max, max)
+        end
+      end
+
+      removed = system_profile.generations.keys - kept
+
+      removed.each do |id|
+        generation = system_profile.generations[id]
+        path = generation.path
+        puts "Removing profile '#{path}'"
+        begin
+          FileUtils.rm(path)
+        rescue => e
+          message = e.message.sub(/ @ apply2files.*/, "")
+          $stderr.puts("Error while removing generation: #{message}")
+          exit 1
+        end
+      end
+    },
+  },
+  "dump-generations" => {
+    parser: OptionParser.new do |opts|
+      opts.banner = "Dump system profile generations information to JSON"
+    end,
+    handler: ->(_) {
+      system_profile = Profile.from_name("system")
+      puts JSON.pretty_generate(system_profile.to_serialized())
+    },
+  },
+}
+
+def parse_cli(argv)
+  main_options = OptionParser.new do |opts|
+    commands_width = COMMANDS.map { |name, _| name.length }.max
+    opts.banner = [
+      "Usage: nixos-profiles-tool [global-opts] <command>",
+      "",
+      "Commands:",
+      COMMANDS.map do |name, command|
+        sep = " " * (commands_width - name.length + 4)
+        "  #{name.to_s()}#{sep}#{command[:parser].banner().split("\n", 2).first}"
+      end,
+      "",
+      "Global options:",
+    ].join("\n")
+    opts.on("--boot-partition=PART", "Boot directory or partition (defaults to /boot)") do |root|
+      $boot_partition = boot_partition
+    end
+    opts.on("--root=ROOT", "Filesystem root (e.g. /mnt)") do |root|
+      $root = root
+    end
+    opts.on("--version", "Prints the version") do
+      puts VERSION
+      exit(0)
+    end
+  end
+
+  leftover = main_options.order(argv, into: $global_options)
+
+  command = COMMANDS[leftover.first]
+
+  if leftover.length == 0
+    $stderr.puts main_options.help()
+    exit 1
+  elsif !command
+    $stderr.puts [
+      "Unknown command #{leftover.first.inspect}.",
+      "",
+      main_options.help(),
+    ]
+    exit 1
+  end
+
+  command[:parser].permute(*leftover, into: $command_options)
+  leftover.shift()
+  command[:handler].call(leftover)
+
+  [$global_options, leftover]
+end
+
+parse_cli(ARGV)
