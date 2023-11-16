@@ -48,45 +48,50 @@ class Generation
     label
   end
 
-  # File names likely copied to a flat "store" in the boot partition (e.g. ESP).
+  # File paths likely copied to a flat "store" in the boot partition (e.g. ESP).
   def boot_files()
-    boot_files = []
+    # Raw filenames found in pseudostores
+    filenames = []
 
     if bootspec
       if bootspec["org.nixos.specialisation.v1"]
         specialisations = bootspec["org.nixos.specialisation.v1"]
         specialisations.each do |name, specialisation|
-          boot_files << specialisation["org.nixos.bootspec.v1"]["initrd"]
-          boot_files << specialisation["org.nixos.bootspec.v1"]["kernel"]
+          filenames << specialisation["org.nixos.bootspec.v1"]["initrd"]
+          filenames << specialisation["org.nixos.bootspec.v1"]["kernel"]
         end
       end
       v1 = bootspec["org.nixos.bootspec.v1"]
       if v1
-        boot_files << v1["initrd"]
-        boot_files << v1["kernel"]
+        filenames << v1["initrd"]
+        filenames << v1["kernel"]
       end
     end
 
     needle = File.join(path, "initrd")
-    boot_files << File.readlink(needle) if File.exists?(needle)
+    filenames << File.readlink(needle) if File.exists?(needle)
 
     needle = File.join(path, "kernel")
-    boot_files << File.readlink(needle) if File.exists?(needle)
+    filenames << File.readlink(needle) if File.exists?(needle)
 
-
-    boot_files.compact.sort.uniq.map do |path|
+    filenames = filenames.compact.sort.uniq.map do |path|
       path.sub(%r{^#{NIX_STORE_DIR}/}, "").gsub("/", "-")
     end
+
+    filenames.map do |filename|
+      PseudoStore.find(filename)
+    end
+      .flatten
   end
 
   def formatted_size_usage()
     files = boot_files_usage
     unique_usage = files[:unique].map do |path|
-      File.size?(File.join($root, $boot_partition, "kernels", path)) || 0
+      File.size?(path) || 0
     end
       .reduce(0, &:+)
     shared_usage = files[:shared].keys.map do |path|
-      File.size?(File.join($root, $boot_partition, "kernels", path)) || 0
+      File.size?(path) || 0
     end
       .reduce(0, &:+)
 

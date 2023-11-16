@@ -26,11 +26,8 @@ COMMANDS = {
       opts.banner = "Checks files status under the `/boot` partition"
     end,
     handler: ->(_) {
-      pseudostore = File.join($root, $boot_partition, "kernels")
       system_profile = Profile.from_name("system")
-      current_files = Dir.chdir(pseudostore) do
-        Dir.glob("*")
-      end
+      current_files = PseudoStore.files()
       known_boot_files = system_profile.boot_files
 
       missing_files = known_boot_files - current_files
@@ -44,18 +41,22 @@ COMMANDS = {
 
       leftover = current_files - known_boot_files
       if leftover != []
-        puts "Extra files in /boot partitions not part of live generations:"
-        leftover.each do |file|
-          puts "  - #{file}\t(#{File.size(File.join(pseudostore, file)).format_size()})"
+        puts "Extra files in /boot partitions not part of live generations (but may still be needed):"
+        leftover.each do |path|
+          if File.directory?(path)
+            puts "  - #{path}/\t(directory)"
+          else
+            puts "  - #{path}\t(#{File.size(path).format_size()})"
+          end
         end
         puts ""
       end
 
-      puts "These live generation files are found under #{pseudostore}:"
+      puts "These live generation files are found in the boot partition:"
       (current_files - leftover)
         .sort { |a, b| a.split("-", 2).last <=> b.split("-", 2).last }
-        .each do |file|
-          puts "  - #{file}\t(#{File.size(File.join(pseudostore, file)).format_size()})"
+        .each do |path|
+          puts "  - #{path}\t(#{File.size(path).format_size()})"
         end
     },
   },
@@ -69,30 +70,44 @@ COMMANDS = {
     end,
     handler: ->(_) {
       system_profile = Profile.from_name("system")
-      Dir.chdir(File.join($root, $boot_partition, "kernels")) do
-        current_files = Dir.glob("*")
-        known_boot_files = system_profile.boot_files
-        leftover = current_files - known_boot_files
-        if leftover == []
-          puts "Nothing needs to be done. (Did you want to remove a generation first?)"
-          exit(0)
-        end
-        puts "Removing files:"
+      current_files = PseudoStore.files()
+      known_boot_files = system_profile.boot_files
+      leftover = current_files - known_boot_files
+      if leftover == []
+        puts "Nothing needs to be done. (Did you want to remove a generation first?)"
+        exit(0)
+      end
+
+      to_be_removed, leftover = leftover.partition do |path|
+        # https://github.com/NixOS/nix/blob/7ba4e073e8622ca86b52e03d68476e80250ab62f/src/libutil/hash.cc#L83-L84
+        path.match(%r{/[0123456789abcdfghijklmnpqrsvwxyz]{32}-})
+      end
+
+      unless leftover == []
+        puts "These paths will not be touched (not Nix Paths):"
         leftover.each do |file|
           puts "  - #{file}"
         end
         puts ""
-
-        begin
-          FileUtils.rm(leftover)
-        rescue => e
-          message = e.message.sub(/ @ apply2files.*/, "")
-          $stderr.puts("Error while removing files: #{message}")
-          exit 1
-        end
-
-        puts "Done..."
       end
+
+      unless to_be_removed == []
+        puts "Removing files:"
+        to_be_removed.each do |file|
+          puts "  - #{file}"
+        end
+        puts ""
+      end
+
+      begin
+        FileUtils.rm(to_be_removed)
+      rescue => e
+        message = e.message.sub(/ @ apply2files.*/, "")
+        $stderr.puts("Error while removing files: #{message}")
+        exit 1
+      end
+
+      puts "Done..."
     },
   },
   "list-generations" => {
